@@ -75,6 +75,16 @@ class Arbiter:
         self.w = delays_to_weights(self.P, self.Q)
         self.n = len(self.P)
 
+    @classmethod
+    def from_weights(cls, w, sigma: float = 0.0) -> "Arbiter":
+        """An arbiter defined directly by its weight vector (e.g. taken from pypuf)."""
+        obj = cls.__new__(cls)
+        obj.P = obj.Q = None
+        obj.w = np.asarray(w, dtype=float)
+        obj.n = len(obj.w) - 1
+        obj.sigma = sigma
+        return obj
+
     @property
     def sigma_delta(self) -> float:
         """sqrt(sum_{i<=n} w_i^2): spread of Delta over uniform challenges."""
