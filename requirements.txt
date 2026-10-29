@@ -3,4 +3,4 @@ scipy>=1.10
 pytest>=7
 # added at later steps:
 # torch>=2.0        (MLP attacker, step 4)
-# pypuf>=3          (optional cross-check, step 2)
+pypuf>=3           # cross-check, step 2
