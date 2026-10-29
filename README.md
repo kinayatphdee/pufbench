@@ -11,8 +11,8 @@ same output flip rate, and paired, deterministic data generation (Section IV-B).
 | Step | Content | State |
 |---|---|---|
 | 1 | Simulator, noise models, calibration, paired data + tests | done |
-| 2 | pypuf cross-check of the simulator | next |
-| 3 | LR attacker | |
+| 2 | pypuf cross-check of the simulator | done |
+| 3 | LR attacker | next |
 | 4 | MLP attacker (PyTorch) | |
 | 5 | CMA-ES attacker | |
 | 6 | Runner and grid | |
@@ -25,7 +25,7 @@ In a GitHub Codespace, Google Colab, or any machine with Python 3.10+:
 
 ```bash
 pip install -r requirements.txt
-pytest -q          # about 1 minute; all tests should pass
+python -m pytest -q   # about 1 minute; all tests should pass
 ```
 
 ## Quick use
