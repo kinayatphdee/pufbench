@@ -66,3 +66,60 @@ class ResultsFile:
             f.flush()
             os.fsync(f.fileno())
         self.done.add(_key(row))
+
+
+# -------------------------------------------------------------- the grid --
+# Step 6b. The defaults are the grid of Section IV-A. Each (family, seed,
+# instance) is drawn once and shared by every attacker, noise condition and
+# budget (Section IV-B); finished runs are skipped.
+
+FAMILIES = ["arbiter", "xor3", "xor4", "xor5", "ff"]
+ATTACKER_NAMES = ["lr", "mlp", "cma"]
+NOISES = ["clean", "delay", "uniform"]
+BUDGETS = [500, 1000, 2000, 5000, 10_000, 20_000, 50_000, 100_000]
+SEEDS = [0, 1, 2, 3, 4]
+INSTANCES = [0, 1, 2, 3, 4]
+
+
+def run_grid(results_path, families=FAMILIES, attackers=ATTACKER_NAMES, noises=NOISES,
+             budgets=BUDGETS, seeds=SEEDS, instances=INSTANCES, log=print):
+    """Run every missing combination; return the number of new runs."""
+    from .sim import draw_cell_data
+    res = ResultsFile(results_path)
+    n_train = max(budgets)
+    new = 0
+    for family in families:
+        for seed in seeds:
+            for inst in instances:
+                todo = [(a, m, N) for a in attackers for m in noises for N in budgets
+                        if not res.has(family, a, m, seed, inst, N)]
+                if not todo:
+                    continue
+                data = draw_cell_data(family, seed, inst, p=0.05, n_train=max(n_train, 100_000))
+                for a, m, N in todo:
+                    row = run_one(data, a, m, N)
+                    res.append(row)
+                    new += 1
+                    log(f"{family} seed={seed} inst={inst} {a:4s} {m:7s} N={N:6d}  "
+                        f"fidelity={row['fidelity']:.4f}  ({row['seconds']:.1f} s)")
+    return new
+
+
+def main(argv=None):
+    """Command line: python -m pufbench.runner --families xor3 --attackers lr ..."""
+    import argparse
+    ap = argparse.ArgumentParser(description="Run (part of) the benchmark grid.")
+    ap.add_argument("--out", default="results/results.csv")
+    ap.add_argument("--families", nargs="+", default=FAMILIES)
+    ap.add_argument("--attackers", nargs="+", default=ATTACKER_NAMES, choices=ATTACKER_NAMES)
+    ap.add_argument("--noises", nargs="+", default=NOISES, choices=NOISES)
+    ap.add_argument("--budgets", nargs="+", type=int, default=BUDGETS)
+    ap.add_argument("--seeds", nargs="+", type=int, default=SEEDS)
+    ap.add_argument("--instances", nargs="+", type=int, default=INSTANCES)
+    a = ap.parse_args(argv)
+    n = run_grid(a.out, a.families, a.attackers, a.noises, a.budgets, a.seeds, a.instances)
+    print(f"done: {n} new runs written to {a.out}")
+
+
+if __name__ == "__main__":
+    main()
