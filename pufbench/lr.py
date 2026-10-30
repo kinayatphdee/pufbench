@@ -14,6 +14,8 @@ from dataclasses import dataclass
 import numpy as np
 from scipy.special import expit
 
+from .seeds import rng_for
+
 LAMBDA = 1e-8
 
 
@@ -76,13 +78,25 @@ def angle_deg(w_hat: np.ndarray, w: np.ndarray) -> float:
     return float(np.degrees(np.arccos(np.clip(c, -1.0, 1.0))))
 
 
-def attack_lr(data, model: str, N: int) -> dict:
-    """Run linear LR on the first N CRPs of a CellData under noise condition ``model``."""
+def attack_lr(data, model: str, N: int, rng: np.random.Generator | None = None) -> dict:
+    """Run LR on the first N CRPs of a CellData under noise condition ``model``.
+
+    Arbiter and feed-forward: single-hyperplane LR (Newton). k-XOR: tanh product.
+    The XOR restarts are seeded from (family, seed, instance, model, N) unless
+    ``rng`` is given, so every run is reproducible.
+    """
     Phi, r = data.Phi_train[:N], data.r_train[model][:N]
-    res = lr_linear(Phi, r)
-    pred = predict_linear(data.Phi_test, res.W)
-    train_err = float(np.mean(predict_linear(Phi, res.W) != r))
-    return {"fidelity": fidelity(pred, data.r_test), "train_error": train_err,
+    if data.family.startswith("xor"):
+        k = int(data.family[3:])
+        if rng is None:
+            rng = rng_for(data.family, data.seed, data.instance, "lr-init", model, N)
+        res = lr_xor(Phi, r, k, rng)
+        predict = predict_xor
+    else:
+        res = lr_linear(Phi, r)
+        predict = predict_linear
+    return {"fidelity": fidelity(predict(data.Phi_test, res.W), data.r_test),
+            "train_error": float(np.mean(predict(Phi, res.W) != r)),
             "train_loss": res.train_loss, "grad_norm": res.grad_norm, "result": res}
 
 
