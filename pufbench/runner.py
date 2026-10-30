@@ -105,11 +105,70 @@ def run_grid(results_path, families=FAMILIES, attackers=ATTACKER_NAMES, noises=N
     return new
 
 
+# --------------------------------------------------------- paper design --
+# Step 6f. The design of Sections IV-A and IV-C, fixed before the grid runs:
+# LR and MLP on the full grid; CMA-ES on a reduced design, because its compute
+# grows roughly as k^3 and it does not model 3-XOR at small budgets.
+
+CMA_DESIGN = {
+    "arbiter": {"seeds": [0], "budgets": BUDGETS},
+    "ff":      {"seeds": [0], "budgets": BUDGETS},
+    "xor3":    {"seeds": [0], "budgets": [2000, 20_000, 100_000]},
+}
+
+
+def paper_plan(families=FAMILIES, attackers=ATTACKER_NAMES):
+    """Yield (family, attacker, noise, seed, instance, N) for every planned run."""
+    for fam in families:
+        for a in attackers:
+            if a == "cma":
+                if fam not in CMA_DESIGN:
+                    continue
+                seeds, budgets = CMA_DESIGN[fam]["seeds"], CMA_DESIGN[fam]["budgets"]
+            else:
+                seeds, budgets = SEEDS, BUDGETS
+            for s in seeds:
+                for i in INSTANCES:
+                    for m in NOISES:
+                        for N in budgets:
+                            yield fam, a, m, s, i, N
+
+
+def run_plan(results_path, plan, log=print):
+    """Run every planned combination not yet in the results file; each instance is drawn once."""
+    from collections import defaultdict
+    from .sim import draw_cell_data
+    res = ResultsFile(results_path)
+    groups = defaultdict(list)
+    for fam, a, m, s, i, N in plan:
+        if not res.has(fam, a, m, s, i, N):
+            groups[(fam, s, i)].append((a, m, N))
+    new = 0
+    for (fam, s, i), todo in groups.items():
+        data = draw_cell_data(fam, s, i, p=0.05, n_train=max(100_000, max(N for _, _, N in todo)))
+        for a, m, N in todo:
+            row = run_one(data, a, m, N)
+            res.append(row)
+            new += 1
+            log(f"{fam} seed={s} inst={i} {a:4s} {m:7s} N={N:6d}  "
+                f"fidelity={row['fidelity']:.4f}  ({row['seconds']:.1f} s)")
+    return new
+
+
+def count_plan(plan):
+    from collections import Counter
+    return Counter((fam, a) for fam, a, _, _, _, _ in plan)
+
+
 def main(argv=None):
     """Command line: python -m pufbench.runner --families xor3 --attackers lr ..."""
     import argparse
     ap = argparse.ArgumentParser(description="Run (part of) the benchmark grid.")
     ap.add_argument("--out", default="results/results.csv")
+    ap.add_argument("--design", choices=["paper"], default=None,
+                    help="run the paper's design (Sections IV-A, IV-C); --families and "
+                         "--attackers still select a part of it")
+    ap.add_argument("--count", action="store_true", help="only print how many runs are planned")
     ap.add_argument("--families", nargs="+", default=FAMILIES)
     ap.add_argument("--attackers", nargs="+", default=ATTACKER_NAMES, choices=ATTACKER_NAMES)
     ap.add_argument("--noises", nargs="+", default=NOISES, choices=NOISES)
@@ -117,7 +176,19 @@ def main(argv=None):
     ap.add_argument("--seeds", nargs="+", type=int, default=SEEDS)
     ap.add_argument("--instances", nargs="+", type=int, default=INSTANCES)
     a = ap.parse_args(argv)
-    n = run_grid(a.out, a.families, a.attackers, a.noises, a.budgets, a.seeds, a.instances)
+    if a.design == "paper":
+        plan = list(paper_plan(a.families, a.attackers))
+        if a.count:
+            res = ResultsFile(a.out)
+            todo = [p for p in plan if not res.has(*p)]
+            for (fam, att), c in sorted(count_plan(plan).items()):
+                left = sum(1 for p in todo if p[0] == fam and p[1] == att)
+                print(f"{fam:8s} {att:4s} {c:5d} planned, {left:5d} still to run")
+            print(f"total: {len(plan)} planned, {len(todo)} still to run")
+            return
+        n = run_plan(a.out, plan)
+    else:
+        n = run_grid(a.out, a.families, a.attackers, a.noises, a.budgets, a.seeds, a.instances)
     print(f"done: {n} new runs written to {a.out}")
 
 
