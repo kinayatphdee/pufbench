@@ -61,3 +61,65 @@ def cma_es(fitfun, x0, sigma0, max_eval, rng, stopf=None):
         if sigma > 1e14 or sigma < 1e-15:
             break
     return xbest, fbest, np.array(hist)
+
+
+# --------------------------------------------------------- PUF fitness --
+# Step 5b. Fitness = 0/1 training error of the hard model, for a whole
+# population at once (Xc has one candidate per column), as xor_train_error in
+# cma_vs_lr.m. Responses r are in {-1, +1}.
+
+def _sign(Z):
+    S = np.sign(Z)
+    S[S == 0] = 1
+    return S
+
+
+def xor_error(Phi, r, Xc, k):
+    """Arbiter (k = 1) and k-XOR. Xc: (k*d, P); candidate = k blocks of d chain weights."""
+    Phi = np.asarray(Phi, dtype=float)
+    N, d = Phi.shape
+    P = Xc.shape[1]
+    W = Xc.reshape(k, d, P)                                   # chain j = rows j*d .. (j+1)*d-1
+    pred = np.prod(_sign(np.einsum("nd,kdp->nkp", Phi, W)), axis=1)
+    return np.mean(pred != np.asarray(r)[:, None], axis=0)
+
+
+def ff_weights(P_st, Q_st, J, K):
+    """Exact linear form of a one-loop feed-forward PUF from its n+1 stage delays.
+
+    Returns (v, alpha, beta) over the challenge features Phi (length n+1):
+      internal delay  Delta_J = Phi_{J+1} * (v . Phi)          (Section III-B)
+      final delay     alpha . Phi if stage K is straight, beta . Phi if crossed.
+    Stage K is crossed when Delta_J > 0 (FF_APUF.m convention).
+    """
+    from .sim import delays_to_weights
+    n = len(P_st) - 1
+    wf = delays_to_weights(P_st, Q_st)                        # n+2 weights over the n+1 stages
+    k0 = K - 1                                                 # 0-based stage index of K
+    alpha = np.empty(n + 1); beta = np.empty(n + 1)
+    alpha[:k0] = wf[:k0];  beta[:k0] = -wf[:k0]
+    alpha[k0] = wf[k0] + wf[k0 + 1];  beta[k0] = -wf[k0] + wf[k0 + 1]
+    alpha[k0 + 1:] = wf[k0 + 2:];  beta[k0 + 1:] = wf[k0 + 2:]
+    wp = delays_to_weights(P_st[:J], Q_st[:J])                # J+1 prefix weights
+    v = np.zeros(n + 1)
+    v[:J] = wp[:J]
+    v[J] = wp[J]
+    return v, alpha, beta
+
+
+def ff_predict(Phi, v, alpha, beta, J):
+    Phi = np.asarray(Phi, dtype=float)
+    internal = Phi[:, J] * (Phi @ v)
+    return _sign(np.where(internal > 0, Phi @ beta, Phi @ alpha))
+
+
+def ff_error(Phi, r, Xc, J, K):
+    """Feed-forward PUF. Xc: (2(n+1), P); candidate = [stage delays p (n+1), q (n+1)]."""
+    Phi = np.asarray(Phi, dtype=float)
+    r = np.asarray(r)
+    m = Xc.shape[0] // 2
+    errs = np.empty(Xc.shape[1])
+    for c in range(Xc.shape[1]):
+        v, a, b = ff_weights(Xc[:m, c], Xc[m:, c], J, K)
+        errs[c] = np.mean(ff_predict(Phi, v, a, b, J) != r)
+    return errs
