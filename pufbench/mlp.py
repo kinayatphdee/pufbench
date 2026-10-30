@@ -109,3 +109,24 @@ def fit_mlp(Phi, r, k, rng, restarts=2, **train_kw):
         if L < best_loss:
             best_net, best_loss = net, L
     return best_net, best_loss
+
+
+# ---------------------------------------------------------- entry point --
+# Step 4c: same interface as attack_lr, so the runner treats both attackers alike.
+
+def attack_mlp(data, model: str, N: int, rng: np.random.Generator | None = None) -> dict:
+    """Run the MLP on the first N CRPs of a CellData under noise condition ``model``.
+
+    The hidden width uses k for k-XOR PUFs and k = 1 otherwise; for every family
+    in the grid this gives layers [16, 32, 16]. Restarts are seeded from
+    (family, seed, instance, model, N) unless ``rng`` is given.
+    """
+    from .seeds import rng_for
+    Phi, r = data.Phi_train[:N], data.r_train[model][:N]
+    k = int(data.family[3:]) if data.family.startswith("xor") else 1
+    if rng is None:
+        rng = rng_for(data.family, data.seed, data.instance, "mlp-init", model, N)
+    net, loss = fit_mlp(Phi, r, k, rng)
+    return {"fidelity": float(np.mean(predict(np.asarray(data.Phi_test, float), net) == data.r_test)),
+            "train_error": float(np.mean(predict(np.asarray(Phi, float), net) != r)),
+            "train_loss": float(loss), "grad_norm": float("nan"), "result": net}
