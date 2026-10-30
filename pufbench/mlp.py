@@ -62,3 +62,50 @@ def predict(X: np.ndarray, net: dict) -> np.ndarray:
     out = np.sign(forward(X, net)[-1]).astype(np.int8)
     out[out == 0] = 1
     return out
+
+
+# ------------------------------------------------------------- training --
+# Step 4b, mirroring train_mlp in mlp_attacks.m: Adam (step 0.002, batch 1,000),
+# at most 200 epochs, stop after 40 epochs without a relative improvement of 1e-4
+# in the epoch loss. Like the MATLAB version, the returned loss is the best
+# epoch loss and the returned network is the one after the last epoch.
+
+def train_mlp(X, y01, net, rng, step=0.002, batch=1000, epochs=200, patience=40, tol=1e-4):
+    N = X.shape[0]
+    bs = min(batch, N)
+    mW = [np.zeros_like(w) for w in net["W"]]; vW = [np.zeros_like(w) for w in net["W"]]
+    mb = [np.zeros_like(b) for b in net["b"]]; vb = [np.zeros_like(b) for b in net["b"]]
+    b1, b2, eps, t = 0.9, 0.999, 1e-8, 0
+    best, stall = np.inf, 0
+    for _ in range(epochs):
+        order = rng.permutation(N)
+        tot = 0.0
+        for j in range(0, N, bs):
+            idx = order[j:j + bs]
+            L, gW, gb = loss_grad(X[idx], y01[idx], net)
+            t += 1
+            for l in range(len(net["W"])):
+                mW[l] = b1 * mW[l] + (1 - b1) * gW[l]; vW[l] = b2 * vW[l] + (1 - b2) * gW[l] ** 2
+                net["W"][l] -= step * (mW[l] / (1 - b1 ** t)) / (np.sqrt(vW[l] / (1 - b2 ** t)) + eps)
+                mb[l] = b1 * mb[l] + (1 - b1) * gb[l]; vb[l] = b2 * vb[l] + (1 - b2) * gb[l] ** 2
+                net["b"][l] -= step * (mb[l] / (1 - b1 ** t)) / (np.sqrt(vb[l] / (1 - b2 ** t)) + eps)
+            tot += L * len(idx) / N
+        if tot < best * (1 - tol):
+            best, stall = tot, 0
+        else:
+            stall += 1
+        if stall >= patience:
+            break
+    return net, best
+
+
+def fit_mlp(Phi, r, k, rng, restarts=2, **train_kw):
+    """Train ``restarts`` networks on (Phi, r in +-1) and keep the lowest-loss one."""
+    X = np.asarray(Phi, dtype=float)
+    y01 = (np.asarray(r) > 0).astype(float)
+    best_net, best_loss = None, np.inf
+    for _ in range(restarts):
+        net, L = train_mlp(X, y01, init_mlp(layer_sizes(X.shape[1], k), rng), rng, **train_kw)
+        if L < best_loss:
+            best_net, best_loss = net, L
+    return best_net, best_loss
