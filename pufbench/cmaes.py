@@ -75,13 +75,19 @@ def _sign(Z):
 
 
 def xor_error(Phi, r, Xc, k):
-    """Arbiter (k = 1) and k-XOR. Xc: (k*d, P); candidate = k blocks of d chain weights."""
-    Phi = np.asarray(Phi, dtype=float)
+    """Arbiter (k = 1) and k-XOR. Xc: (k*d, P); candidate = k blocks of d chain weights.
+
+    The XOR of k signs is -1 exactly when an odd number of chain outputs are
+    negative, so the population is scored by one float32 matrix product and a
+    parity count (step 6e speed-up; same values as the plain sign product).
+    """
+    Phi = np.asarray(Phi, dtype=np.float32)
     N, d = Phi.shape
     P = Xc.shape[1]
-    W = Xc.reshape(k, d, P)                                   # chain j = rows j*d .. (j+1)*d-1
-    pred = np.prod(_sign(np.einsum("nd,kdp->nkp", Phi, W)), axis=1)
-    return np.mean(pred != np.asarray(r)[:, None], axis=0)
+    W = np.asarray(Xc, dtype=np.float32).reshape(k, d, P).transpose(1, 0, 2).reshape(d, k * P)
+    neg = (Phi @ W < 0).reshape(N, k, P)
+    pred_neg = (neg.sum(axis=1) % 2).astype(bool)
+    return np.mean(pred_neg != (np.asarray(r) < 0)[:, None], axis=0)
 
 
 def ff_weights(P_st, Q_st, J, K):
@@ -113,16 +119,33 @@ def ff_predict(Phi, v, alpha, beta, J):
     return _sign(np.where(internal > 0, Phi @ beta, Phi @ alpha))
 
 
-def ff_error(Phi, r, Xc, J, K):
-    """Feed-forward PUF. Xc: (2(n+1), P); candidate = [stage delays p (n+1), q (n+1)]."""
-    Phi = np.asarray(Phi, dtype=float)
-    r = np.asarray(r)
+def _ff_weights_population(Xc, J, K):
+    """ff_weights for every column of Xc at once; returns (v, alpha, beta), each (n+1, P)."""
     m = Xc.shape[0] // 2
-    errs = np.empty(Xc.shape[1])
-    for c in range(Xc.shape[1]):
-        v, a, b = ff_weights(Xc[:m, c], Xc[m:, c], J, K)
-        errs[c] = np.mean(ff_predict(Phi, v, a, b, J) != r)
-    return errs
+    Pd, Qd = Xc[:m], Xc[m:]
+    a, b = (Pd - Qd) / 2.0, (Pd + Qd) / 2.0
+    z = np.zeros((1, Xc.shape[1]))
+    wf = np.vstack([a, z]) + np.vstack([z, b])                # (n+2, P)
+    k0 = K - 1
+    alpha = np.vstack([wf[:k0], wf[k0:k0 + 1] + wf[k0 + 1:k0 + 2], wf[k0 + 2:]])
+    beta = np.vstack([-wf[:k0], -wf[k0:k0 + 1] + wf[k0 + 1:k0 + 2], wf[k0 + 2:]])
+    ap, bp = a[:J], b[:J]
+    wp = np.vstack([ap, z]) + np.vstack([z, bp])               # (J+1, P)
+    v = np.zeros_like(alpha)
+    v[:J + 1] = wp
+    return v, alpha, beta
+
+
+def ff_error(Phi, r, Xc, J, K):
+    """Feed-forward PUF. Xc: (2(n+1), P); candidate = [stage delays p (n+1), q (n+1)].
+
+    Whole population at once: three float32 matrix products (step 6e speed-up).
+    """
+    Phi = np.asarray(Phi, dtype=np.float32)
+    v, a, b = (x.astype(np.float32) for x in _ff_weights_population(np.asarray(Xc, float), J, K))
+    internal = Phi[:, J:J + 1] * (Phi @ v)
+    final = np.where(internal > 0, Phi @ b, Phi @ a)
+    return np.mean((final < 0) != (np.asarray(r) < 0)[:, None], axis=0)
 
 
 # ---------------------------------------------------------- entry point --
