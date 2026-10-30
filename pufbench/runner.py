@@ -155,6 +155,13 @@ def run_plan(results_path, plan, log=print):
     return new
 
 
+def filter_plan(plan, noises=NOISES, seeds=SEEDS, instances=INSTANCES, budgets=BUDGETS):
+    """Step 6g: keep only planned runs matching the filters (selects part of the design)."""
+    noises, seeds, instances, budgets = set(noises), set(seeds), set(instances), set(budgets)
+    return [p for p in plan
+            if p[2] in noises and p[3] in seeds and p[4] in instances and p[5] in budgets]
+
+
 def count_plan(plan):
     from collections import Counter
     return Counter((fam, a) for fam, a, _, _, _, _ in plan)
@@ -166,8 +173,8 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="Run (part of) the benchmark grid.")
     ap.add_argument("--out", default="results/results.csv")
     ap.add_argument("--design", choices=["paper"], default=None,
-                    help="run the paper's design (Sections IV-A, IV-C); --families and "
-                         "--attackers still select a part of it")
+                    help="run the paper's design (Sections IV-A, IV-C); the other options "
+                         "select a part of it without changing it")
     ap.add_argument("--count", action="store_true", help="only print how many runs are planned")
     ap.add_argument("--families", nargs="+", default=FAMILIES)
     ap.add_argument("--attackers", nargs="+", default=ATTACKER_NAMES, choices=ATTACKER_NAMES)
@@ -177,7 +184,8 @@ def main(argv=None):
     ap.add_argument("--instances", nargs="+", type=int, default=INSTANCES)
     a = ap.parse_args(argv)
     if a.design == "paper":
-        plan = list(paper_plan(a.families, a.attackers))
+        plan = filter_plan(paper_plan(a.families, a.attackers),
+                           a.noises, a.seeds, a.instances, a.budgets)
         if a.count:
             res = ResultsFile(a.out)
             todo = [p for p in plan if not res.has(*p)]
