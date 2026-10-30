@@ -123,3 +123,59 @@ def ff_error(Phi, r, Xc, J, K):
         v, a, b = ff_weights(Xc[:m, c], Xc[m:, c], J, K)
         errs[c] = np.mean(ff_predict(Phi, v, a, b, J) != r)
     return errs
+
+
+# ---------------------------------------------------------- entry point --
+# Step 5c, following cma_vs_lr.m: sigma0 = 0.3, at most 400*dim evaluations per
+# restart, 3 restarts, stop as soon as the training error reaches 0. Each restart
+# starts at N(0, 1) / sqrt(d). The fitness is the 0/1 training error; the restart
+# with the lowest training error is kept.
+
+def fit_cma(Phi, r, family, rng, J=None, K=None, sigma0=0.3, eval_per_dim=400,
+            restarts=3, stopf=0.0):
+    Phi = np.asarray(Phi, dtype=float)
+    d = Phi.shape[1]
+    if family == "ff":
+        dim = 2 * d                                           # n+1 stage delays p and q
+        fit = lambda Xc: ff_error(Phi, r, Xc, J, K)
+    else:
+        k = int(family[3:]) if family.startswith("xor") else 1
+        dim = k * d
+        fit = lambda Xc: xor_error(Phi, r, Xc, k)
+    best_x, best_err, used = None, np.inf, 0
+    for _ in range(restarts):
+        x0 = rng.standard_normal(dim) / np.sqrt(d)
+        xb, fb, hist = cma_es(fit, x0, sigma0, eval_per_dim * dim, rng, stopf)
+        used += int(hist[-1, 0])
+        if fb < best_err:
+            best_x, best_err = xb, fb
+        if best_err <= stopf:
+            break
+    return best_x, float(best_err), used
+
+
+def _cma_predict(Phi, x, family, J=None, K=None):
+    Phi = np.asarray(Phi, dtype=float)
+    d = Phi.shape[1]
+    if family == "ff":
+        v, a, b = ff_weights(x[:d], x[d:], J, K)
+        return ff_predict(Phi, v, a, b, J)
+    k = int(family[3:]) if family.startswith("xor") else 1
+    return np.prod(_sign(Phi @ x.reshape(k, d).T), axis=1)
+
+
+def attack_cma(data, model: str, N: int, rng: np.random.Generator | None = None, **kw) -> dict:
+    """Run CMA-ES on the first N CRPs of a CellData under noise condition ``model``.
+
+    Same fields as attack_lr and attack_mlp, plus the number of fitness
+    evaluations used. Restarts are seeded from the cell keys unless ``rng`` is given.
+    """
+    from .seeds import rng_for
+    Phi, r = data.Phi_train[:N], data.r_train[model][:N]
+    if rng is None:
+        rng = rng_for(data.family, data.seed, data.instance, "cma-init", model, N)
+    J = getattr(data.inst, "J", None); K = getattr(data.inst, "K", None)
+    x, err, used = fit_cma(Phi, r, data.family, rng, J, K, **kw)
+    pred = _cma_predict(data.Phi_test, x, data.family, J, K)
+    return {"fidelity": float(np.mean(pred == data.r_test)), "train_error": err,
+            "train_loss": err, "grad_norm": float("nan"), "result": x, "evaluations": used}
